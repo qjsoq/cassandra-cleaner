@@ -7,7 +7,6 @@ from cassandra.cluster import Cluster, ExecutionProfile, EXEC_PROFILE_DEFAULT, S
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.query import PreparedStatement
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class CassandraCleaner:
@@ -39,7 +38,7 @@ class CassandraCleaner:
                 logger.info("Cassandra connected and prepared statement ready.")
             except Exception as e:
                 logger.error(f"CRITICAL: Could not connect to Cassandra cluster: {e}")
-                raise e
+                raise
 
     def shutdown(self):
         if self.cluster:
@@ -61,12 +60,17 @@ class CassandraCleaner:
         tasks = [self.delete_row_task(row=row, semaphore=self.semaphore, loop=loop) for row in rows]
         
         logger.info(f"Starting deletion of {len(tasks)} partitions with shared concurrency limit")
-        results: list = await asyncio.gather(*tasks)
+        results: list = await asyncio.gather(*tasks, return_exceptions=True)
         logger.info(f"Complete deletion of {len(tasks)} partitions")
-        
+
+        failures: list[tuple[dict, Exception]] = []
         for index, result in enumerate(results):
             if isinstance(result, Exception):
                 logger.error(f"Failed to delete the partition with this key {rows[index]} with exception {result}")
+                failures.append((rows[index], result))
+
+        if failures:
+            raise RuntimeError(f"{len(failures)} out of {len(rows)} partition deletions failed")
                 
 
                 

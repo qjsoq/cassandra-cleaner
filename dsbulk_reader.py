@@ -6,8 +6,9 @@ import logging
 from typing import override
 import time
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+MAX_DSBULK_RETRIES = 10
 
 
 class DsBulkReader(threading.Thread):
@@ -42,9 +43,9 @@ class DsBulkReader(threading.Thread):
                   "-query", "SELECT DISTINCT entity_type, entity_id, key, partition FROM tb.ts_kv_cf",
                   "--connector.csv.maxRecords", "5000",
                   "--executor.maxPerSecond", "1024"]
-        while True:
+        for attempt in range(1, MAX_DSBULK_RETRIES + 1):
             current_cmd: list[str] = dsbulk_command.copy()
-            
+
             checkpoint: str | None = self._find_latest_checkpoint()
 
             if checkpoint:
@@ -54,14 +55,16 @@ class DsBulkReader(threading.Thread):
                 current_cmd.append("resume")
 
             self.process = subprocess.Popen(current_cmd, text=True)
-            
+
             self.process.wait()
-            
+
             if self.process.returncode == 0:
                 break
-            
-            logger.warning("The partition extraction failed, attempting to restart the process")
+
+            logger.warning(f"The partition extraction failed (attempt {attempt}/{MAX_DSBULK_RETRIES}), attempting to restart the process")
             time.sleep(15)
+        else:
+            logger.error(f"dsbulk failed after {MAX_DSBULK_RETRIES} attempts, giving up")
 
     @override
     def run(self):

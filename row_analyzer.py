@@ -10,9 +10,8 @@ import logging
 import csv
 import os
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-DATABASE_DSN = f"postgresql://{os.getenv('DATABASE_USERNAME', 'postgres')}:{urllib.parse.quote_plus(os.getenv('DATABASE_PASSWORD', 'postgres'))}@{os.getenv('DATABASE_HOST', "localhost")}:5432/thingsboard"
+
 BATCH_SIZE = 500
 
 ENTITY_TABLE_NAME_MAP = {
@@ -63,6 +62,17 @@ ENTITY_TABLE_NAME_MAP = {
     "ADMIN_SETTINGS": "admin_settings",
     "AI_MODEL": "ai_model"
 }
+
+ALLOWED_TABLE_NAMES: frozenset[str] = frozenset(ENTITY_TABLE_NAME_MAP.values())
+
+
+def _build_database_dsn() -> str:
+    username = os.getenv('DATABASE_USERNAME', 'postgres')
+    password = urllib.parse.quote_plus(os.getenv('DATABASE_PASSWORD', 'postgres'))
+    host = os.getenv('DATABASE_HOST', 'localhost')
+    return f"postgresql://{username}:{password}@{host}:5432/thingsboard"
+
+
 class RowAnalyzer(Process):
     
 
@@ -87,7 +97,10 @@ class RowAnalyzer(Process):
         if not table_name:
             logger.warning(f"Table name for this entity_type not found {entity_type}")
             return
-        
+
+        if table_name not in ALLOWED_TABLE_NAMES:
+            raise ValueError(f"Table name '{table_name}' is not in the allowlist")
+
         logger.info(f"Checking rows in {table_name} table for worker {self.name}")
         query: str = f"SELECT id from {table_name} where id = ANY($1::uuid[])"
         
@@ -117,7 +130,7 @@ class RowAnalyzer(Process):
         if not self.dry_run:
             self.cassandra_cleaner.connect()
         
-        async with asyncpg.create_pool(dsn=DATABASE_DSN, min_size=5, max_size=6) as postgres_pool:
+        async with asyncpg.create_pool(dsn=_build_database_dsn(), min_size=5, max_size=6) as postgres_pool:
             loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
             try:
                 while True:
@@ -146,36 +159,51 @@ class RowAnalyzer(Process):
         group_by_entity = csv_data_frame.groupby("entity_type")
         logger.info(f"The size of grouping by entity is {group_by_entity.size()}")
         
-        for entitye_type, group_data_frame in group_by_entity:
-            logger.info(f"Appending tasks for {entitye_type} in {file_path} with {len(group_data_frame)}")
+        for entity_type, group_data_frame in group_by_entity:
+            logger.info(f"Appending tasks for {entity_type} in {file_path} with {len(group_data_frame)}")
             tasks.append(
-                self.check_rows_in_postgres(group_data_frame, connection_pool, str(entitye_type))
+                self.check_rows_in_postgres(group_data_frame, connection_pool, str(entity_type))
             )
         
         logger.info(f"Send request to Postgres for {file_path}")
-        results: list[pd.DataFrame | None] = await asyncio.gather(*tasks)
-        
+        results: list[pd.DataFrame | None | BaseException] = await asyncio.gather(*tasks, return_exceptions=True)
+
+        has_postgres_errors = False
         delete_tasks = []
-        for obsolete_dataframe_per_type in results:
-            if obsolete_dataframe_per_type is None or obsolete_dataframe_per_type.empty:
+        for result in results:
+            if isinstance(result, BaseException):
+                logger.error(f"Postgres check failed for {file_path}: {result}")
+                has_postgres_errors = True
                 continue
-            rows: list[dict] = obsolete_dataframe_per_type.to_dict(orient="records")
+            if result is None or result.empty:
+                continue
+            rows: list[dict] = result.to_dict(orient="records")
             for row in rows:
                 logger.info(f"Deleting this partition key entity_type: {row['entity_type']}, entity_id: {row['entity_id']}, key: {row['key']}, partition: {row['partition']}")
-                
+
             if self.dry_run:
                 continue
             else:
                 delete_tasks.append(self.cassandra_cleaner.delete_partitions(rows=rows))
-            
+
+        has_delete_errors = False
         if delete_tasks:
-            await asyncio.gather(*delete_tasks)
+            delete_results = await asyncio.gather(*delete_tasks, return_exceptions=True)
+            for dr in delete_results:
+                if isinstance(dr, BaseException):
+                    logger.error(f"Cassandra deletion failed for {file_path}: {dr}")
+                    has_delete_errors = True
+
+        if has_postgres_errors or has_delete_errors:
+            logger.error(f"Skipping file removal due to errors: {file_path}")
+            return
+
         try:
             logger.info(f"Remove {file_path}")
             os.remove(file_path)
-            logger.info(f"Complete processing {file_path} it took {time.time() - start_time} seconds  for {self.name}")
-        except OSError:
-            pass
+            logger.info(f"Complete processing {file_path} it took {time.time() - start_time} seconds for {self.name}")
+        except OSError as e:
+            logger.error(f"Failed to remove file {file_path}: {e}")
             
             
     @override
