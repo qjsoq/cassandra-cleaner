@@ -1,4 +1,5 @@
 import os
+import argparse
 from multiprocessing import Queue
 from dsbulk_reader import DsBulkReader
 from file_seeker import FileSeeker
@@ -17,6 +18,14 @@ PARTITIONS_DIRECTORY: str = os.path.join(os.path.dirname(WORKING_DIRECTORY), "pa
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Script to delete obsolete telemetry")
+    parser.add_argument("--dry-run", action="store_true", help="Simulate the run without actually deleting data from Cassandra")
+    
+    args = parser.parse_args()
+    
+    if args.dry_run:
+        logger.warning(f"RUNNING IN DRY MODE")
+    
     start_time: float = time.time()
     bulk_reader = DsBulkReader(WORKING_DIRECTORY, PARTITIONS_DIRECTORY, CASSANDRA_URL, CASSANDRA_DC)
     bulk_reader.start()
@@ -28,7 +37,7 @@ if __name__ == "__main__":
         for worker in range(WORKER_COUNT):
             queue_worker: "Queue[str | None]" = Queue()
             queues.append(queue_worker)
-            row_analyzer =  RowAnalyzer(queue_worker)
+            row_analyzer =  RowAnalyzer(queue_worker, args.dry_run)
             analyzers.append(row_analyzer)
 
         file_seeker_instance = FileSeeker(PARTITIONS_DIRECTORY, queues, threshold_timeout_seconds=5)

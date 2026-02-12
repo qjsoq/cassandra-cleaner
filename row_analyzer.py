@@ -12,7 +12,7 @@ import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-DATABASE_DSN = f"postgresql://{os.getenv('DATABASE_USERNAME', 'thingsboard')}:{urllib.parse.quote_plus(os.getenv('DATABASE_PASSWORD', 'cr67SDQQ?fEvA>m6KX8X]:|C'))}@{os.getenv('DATABASE_HOST', "localhost")}:5432/thingsboard"
+DATABASE_DSN = f"postgresql://{os.getenv('DATABASE_USERNAME', 'postgres')}:{urllib.parse.quote_plus(os.getenv('DATABASE_PASSWORD', 'postgres'))}@{os.getenv('DATABASE_HOST', "localhost")}:5432/thingsboard"
 BATCH_SIZE = 500
 
 ENTITY_TABLE_NAME_MAP = {
@@ -66,9 +66,10 @@ ENTITY_TABLE_NAME_MAP = {
 class RowAnalyzer(Process):
     
 
-    def __init__(self, read_queue: "Queue[str | None]"):
+    def __init__(self, read_queue: "Queue[str | None]", dry_run: bool):
         super().__init__()
         self.read_queue = read_queue
+        self.dry_run = dry_run
         self.cassandra_cleaner = CassandraCleaner(
             hosts=[os.getenv('CASSANDRA_HOST', 'localhost')],
             username=os.getenv('CASSANDRA_USERNAME', 'cassandra'),
@@ -89,7 +90,7 @@ class RowAnalyzer(Process):
         
         logger.info(f"Checking rows in {table_name} table for worker {self.name}")
         query: str = f"SELECT id from {table_name} where id = ANY($1::uuid[])"
-        await connection_pool.fetchval("SELECT pg_sleep(8)")
+        
         start_fetch_time: float = time.time()
         
         found_rows = None
@@ -113,7 +114,8 @@ class RowAnalyzer(Process):
             
         
     async def analyzer_event_loop(self) -> None:
-        self.cassandra_cleaner.connect()
+        if not self.dry_run:
+            self.cassandra_cleaner.connect()
         
         async with asyncpg.create_pool(dsn=DATABASE_DSN, min_size=5, max_size=6) as postgres_pool:
             loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
@@ -123,12 +125,13 @@ class RowAnalyzer(Process):
                     file_path: str | None = await loop.run_in_executor(None, self.read_queue.get)
                     
                     if file_path is None:
-                        logger.info("Received poison pill. Shutting down analyzer.")
+                        logger.info(f"Received poison pill. Shutting down analyzer. {self.name}")
                         break
 
                     await self.get_row_from_file(file_path, postgres_pool)
             finally:
-                self.cassandra_cleaner.shutdown()
+                if not self.dry_run:
+                    self.cassandra_cleaner.shutdown()
                 
     
     async def get_row_from_file(self, file_path: str, connection_pool: asyncpg.Pool) -> None:
@@ -141,21 +144,30 @@ class RowAnalyzer(Process):
         csv_data_frame: pd.DataFrame = await loop.run_in_executor(None, pd.read_csv, file_path)
         
         group_by_entity = csv_data_frame.groupby("entity_type")
+        logger.info(f"The size of grouping by entity is {group_by_entity.size()}")
         
         for entitye_type, group_data_frame in group_by_entity:
-            logger.info(f"Appending tasks for {entitye_type} in {file_path}")
+            logger.info(f"Appending tasks for {entitye_type} in {file_path} with {len(group_data_frame)}")
             tasks.append(
                 self.check_rows_in_postgres(group_data_frame, connection_pool, str(entitye_type))
             )
         
         logger.info(f"Send request to Postgres for {file_path}")
         results: list[pd.DataFrame | None] = await asyncio.gather(*tasks)
+        
         delete_tasks = []
         for obsolete_dataframe_per_type in results:
             if obsolete_dataframe_per_type is None or obsolete_dataframe_per_type.empty:
                 continue
             rows: list[dict] = obsolete_dataframe_per_type.to_dict(orient="records")
-            delete_tasks.append(self.cassandra_cleaner.delete_partitions(rows=rows))
+            for row in rows:
+                logger.info(f"Deleting this partition key entity_type: {row['entity_type']}, entity_id: {row['entity_id']}, key: {row['key']}, partition: {row['partition']}")
+                
+            if self.dry_run:
+                continue
+            else:
+                delete_tasks.append(self.cassandra_cleaner.delete_partitions(rows=rows))
+            
         if delete_tasks:
             await asyncio.gather(*delete_tasks)
         try:
