@@ -2,8 +2,12 @@ import os
 import subprocess
 import glob
 import threading
+import logging
 from typing import override
 import time
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class DsBulkReader(threading.Thread):
@@ -24,7 +28,7 @@ class DsBulkReader(threading.Thread):
         checkpoints: list[str] = glob.glob(os.path.join(self.log_dir, "UNLOAD_*/checkpoint.csv"))
         
         if not checkpoints:
-            print(f"No checkpoints found in {self.log_dir}")
+            logger.info(f"No checkpoints found in {self.log_dir}")
             return None
         
         return max(checkpoints, key=os.path.getmtime)
@@ -44,7 +48,7 @@ class DsBulkReader(threading.Thread):
             checkpoint: str | None = self._find_latest_checkpoint()
 
             if checkpoint:
-                print(f"Found this checkpoint {checkpoint}")
+                logger.info(f"Found this checkpoint {checkpoint}")
                 current_cmd.append(f"--dsbulk.log.checkpoint.file={checkpoint}")
                 current_cmd.append("--dsbulk.log.checkpoint.replayStrategy")
                 current_cmd.append("resume")
@@ -56,7 +60,7 @@ class DsBulkReader(threading.Thread):
             if self.process.returncode == 0:
                 break
             
-            print("The partition extraction failed, attempting to retsart the process")
+            logger.warning("The partition extraction failed, attempting to restart the process")
             time.sleep(15)
 
     @override

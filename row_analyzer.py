@@ -11,7 +11,7 @@ import csv
 import os
 
 logging.basicConfig(level=logging.INFO)
-loger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 DATABASE_DSN = f"postgresql://{os.getenv('DATABASE_USERNAME', 'thingsboard')}:{urllib.parse.quote_plus(os.getenv('DATABASE_PASSWORD', 'cr67SDQQ?fEvA>m6KX8X]:|C'))}@{os.getenv('DATABASE_HOST', "localhost")}:5432/thingsboard"
 BATCH_SIZE = 500
 
@@ -66,44 +66,65 @@ ENTITY_TABLE_NAME_MAP = {
 class RowAnalyzer(Process):
     
 
-    def __init__(self, read_queue: "Queue[str]"):
+    def __init__(self, read_queue: "Queue[str | None]"):
         super().__init__()
         self.read_queue = read_queue
         self.cassandra_cleaner = CassandraCleaner(
             hosts=[os.getenv('CASSANDRA_HOST', 'localhost')],
             username=os.getenv('CASSANDRA_USERNAME', 'cassandra'),
-            password=os.getenv('CASSANDRA_PASSWORD', 'cassandra'), 
-            port=9042
+            password=os.getenv('CASSANDRA_PASSWORD', 'cassandra')
         )
+        
     
     async def check_rows_in_postgres(self, row_dict: pd.DataFrame, connection_pool: asyncpg.Pool, entity_type: str) -> None | pd.DataFrame:
 
         table_name: str | None = ENTITY_TABLE_NAME_MAP.get(entity_type)
         
-        entity_ids: list[str] = row_dict["entity_id"].astype(str).to_list()
+        temp_list_entity_ids: list[str] = row_dict["entity_id"].astype(str).to_list()
+        set_entity_ids = set(temp_list_entity_ids)
+        
         if not table_name:
-            loger.warning(f"Table name for this entity_type not found {entity_type}")
+            logger.warning(f"Table name for this entity_type not found {entity_type}")
             return
         
-        loger.info(f"Checking rows in {table_name}")
+        logger.info(f"Checking rows in {table_name} table for worker {self.name}")
         query: str = f"SELECT id from {table_name} where id = ANY($1::uuid[])"
+        await connection_pool.fetchval("SELECT pg_sleep(8)")
+        start_fetch_time: float = time.time()
         
-        found_rows = await connection_pool.fetch(query, entity_ids)
+        found_rows = None
         
-        loger.info(msg=f"Found rows for {entity_type}: {len(found_rows)}")
-        found_ids: list[str] = [str(found_row["id"]) for found_row in found_rows]
+        for attempt in range(10):
+            try:    
+                found_rows = await connection_pool.fetch(query, set_entity_ids)
+                break
+            except asyncpg.exceptions.SerializationError as exc:
+                logger.warning(f"The query execution failed on {attempt+1} attempt on {self.name} with query {query} with following parameters {set_entity_ids} ")
+                logger.warning(f"With the following error: {exc}")
+                await asyncio.sleep(2)
         
-        return row_dict[~row_dict["entity_id"].isin(found_ids)]        
+        if found_rows is None:
+            raise RuntimeError(f"Failed to fetch rows {self.name}")
+        
+        logger.info(msg=f"Found rows for {entity_type}: {len(found_rows)} it took {time.time() - start_fetch_time} seconds for {self.name}")
+        found_ids: set[str] = {str(found_row["id"]) for found_row in found_rows}
+        
+        return row_dict[~row_dict["entity_id"].isin(found_ids)]
             
         
-    async def analyzer_event_loop(self) -> NoReturn:
+    async def analyzer_event_loop(self) -> None:
         self.cassandra_cleaner.connect()
         
         async with asyncpg.create_pool(dsn=DATABASE_DSN, min_size=5, max_size=6) as postgres_pool:
             loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
             try:
                 while True:
-                    file_path: str = await loop.run_in_executor(None, self.read_queue.get)
+
+                    file_path: str | None = await loop.run_in_executor(None, self.read_queue.get)
+                    
+                    if file_path is None:
+                        logger.info("Received poison pill. Shutting down analyzer.")
+                        break
 
                     await self.get_row_from_file(file_path, postgres_pool)
             finally:
@@ -113,32 +134,34 @@ class RowAnalyzer(Process):
     async def get_row_from_file(self, file_path: str, connection_pool: asyncpg.Pool) -> None:
         tasks: list[Coroutine[Any, Any, Any]] = []
         start_time: float = time.time()
-        loger.info(f"Start processing {file_path}")
+        logger.info(f"Start processing {file_path}")
         
         loop = asyncio.get_running_loop()
-        loger.info(f"Load file {file_path}")
+        logger.info(f"Load file {file_path}")
         csv_data_frame: pd.DataFrame = await loop.run_in_executor(None, pd.read_csv, file_path)
         
         group_by_entity = csv_data_frame.groupby("entity_type")
         
         for entitye_type, group_data_frame in group_by_entity:
-            loger.info(f"Appendind tasks for {entitye_type} in {file_path}")
+            logger.info(f"Appending tasks for {entitye_type} in {file_path}")
             tasks.append(
                 self.check_rows_in_postgres(group_data_frame, connection_pool, str(entitye_type))
             )
         
-        loger.info(f"Send request to Postgres for {file_path}")
-        results: list[pd.DataFrame] = await asyncio.gather(*tasks)
+        logger.info(f"Send request to Postgres for {file_path}")
+        results: list[pd.DataFrame | None] = await asyncio.gather(*tasks)
         delete_tasks = []
         for obsolete_dataframe_per_type in results:
-            rows = obsolete_dataframe_per_type.to_dict(orient="records")
+            if obsolete_dataframe_per_type is None or obsolete_dataframe_per_type.empty:
+                continue
+            rows: list[dict] = obsolete_dataframe_per_type.to_dict(orient="records")
             delete_tasks.append(self.cassandra_cleaner.delete_partitions(rows=rows))
         if delete_tasks:
             await asyncio.gather(*delete_tasks)
         try:
-            loger.info(f"Remove {file_path}")
+            logger.info(f"Remove {file_path}")
             os.remove(file_path)
-            loger.info(f"Complete processing {file_path} it took {time.time() - start_time} seconds")
+            logger.info(f"Complete processing {file_path} it took {time.time() - start_time} seconds  for {self.name}")
         except OSError:
             pass
             
@@ -148,4 +171,5 @@ class RowAnalyzer(Process):
         try:
             asyncio.run(self.analyzer_event_loop())
         except Exception as e:
-            loger.exception(f"Caught exception {e.with_traceback}")
+            logger.exception(f"Caught exception {self.name}")
+            raise
