@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cassandra-cleaner-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cassandra-cleaner
+  labels:
+    app: cassandra-cleaner-dry
+spec:
+  backoffLimit: 0 
+  template:
+    metadata:
+      labels:
+        app: cassandra-cleaner-dry
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: cassandra-cleaner
+        image: artamonovdima/cassandra_cleaner_dry_run:1.2
+        command: ["/bin/sh", "-c"]
+        args: ["mkdir -p /data/logs && /app/main --dry-run 2>&1 | tee /data/logs/cleaner-$(date +%Y%m%d-%H%M%S).log"]
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "4000m"
+          requests:
+            memory: "1Gi"
+            cpu: "4000m"
+        env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: CASSANDRA_URL
+          value: "cassandra-headless.thingsboard.svc.cluster.local"
+        - name: CASSANDRA_DC
+          value: "ske"
+        - name: CASSANDRA_USER
+          valueFrom: 
+            secretKeyRef:
+              name: thingsboard-cluster-superuser
+              key: username
+        - name: CASSANDRA_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: thingsboard-cluster-superuser
+              key: password
+        - name: DATABASE_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-ha-pguser-thingsboard
+              key: user
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-ha-pguser-thingsboard
+              key: password
+        - name: DATABASE_HOST
+          value: "postgresql-ha-replicas.thingsboard.svc.cluster.local"
+        - name: PARTITION_KEYS_DIRECTORY
+          value: "/data/working/"
+        volumeMounts:
+        - name: cassandra-cleaner-storage
+          mountPath: /data
+      volumes:
+      - name: cassandra-cleaner-storage
+        persistentVolumeClaim:
+          claimName: cassandra-cleaner-storage

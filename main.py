@@ -22,7 +22,7 @@ _shutdown_requested = False
 
 def _signal_handler(signum, frame):
     global _shutdown_requested
-    logger.warning(f"Received signal {signal.Signals(signum).name}, shutting down...")
+    logger.warning(f"Received signal {signal.Signals(signum).name}, shutting down")
     _shutdown_requested = True
 
 def main():
@@ -51,7 +51,7 @@ def main():
             row_analyzer =  RowAnalyzer(queue_worker, args.dry_run)
             analyzers.append(row_analyzer)
 
-        file_seeker_instance = FileSeeker(PARTITIONS_DIRECTORY, queues, threshold_timeout_seconds=60)
+        file_seeker_instance = FileSeeker(PARTITIONS_DIRECTORY, queues)
         file_seeker_instance.start()
 
         for i in analyzers:
@@ -72,13 +72,13 @@ def main():
                  pending_files = os.listdir(PARTITIONS_DIRECTORY)
 
                  if not pending_files:
-                     logger.info(f"The task completed in {time.time() - start_time}")
-                     logger.info("All tasks completed. performing graceful shutdown.")
+                    logger.info(f"The task completed in {time.time() - start_time}")
+                    logger.info("All tasks completed. performing graceful shutdown.")
+                    break
 
-                     # Send poison pills to all workers
-                     for q in queues:
-                         q.put(None)
-                     break
+        # Send poison pills to all workers
+        for q in queues:
+            q.put(None)
 
     finally:
         logger.warning("Stop all processes")
@@ -94,10 +94,6 @@ def main():
             if analyzer.is_alive():
                  logger.warning(f"Analyzer {analyzer.name} did not finish gracefully, terminating.")
                  analyzer.terminate()
-
-        for analyzer in analyzers:
-             if analyzer.is_alive():
-                analyzer.join()
 
 if __name__ == "__main__":
     main()

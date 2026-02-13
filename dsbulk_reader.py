@@ -42,9 +42,18 @@ class DsBulkReader(threading.Thread):
                   "-url", self.partitions_directory,
                   "-logDir", self.log_dir,
                   "-dc", self.cassandra_dc,
+                  "-u", os.getenv('CASSANDRA_USERNAME', 'cassandra'),
+                  "-p", os.getenv('CASSANDRA_PASSWORD', 'cassandra'),
                   "-query", "SELECT DISTINCT entity_type, entity_id, key, partition FROM tb.ts_kv_cf",
                   "--connector.csv.maxRecords", "5000",
-                  "--executor.maxPerSecond", "1024"]
+                  "--executor.maxPerSecond", "2048",
+                  "--executor.continuousPaging.enabled", "false",
+                  "--schema.splits", "50000",
+                  "--engine.maxConcurrentQueries", "64",
+                  "--driver.advanced.protocol.compression", "lz4",
+                  "--log.maxErrors", "999888",
+                  "--log.verbosity", "high",
+                  "--driver.basic.request.consistency", "LOCAL_QUORUM"]
         for attempt in range(1, MAX_DSBULK_RETRIES + 1):
             current_cmd: list[str] = dsbulk_command.copy()
 
@@ -63,13 +72,20 @@ class DsBulkReader(threading.Thread):
             self.process = subprocess.Popen(current_cmd, text=True)
 
             self.process.wait()
-
+            
+            if self._stop_event.is_set():
+                logger.info("DsBulkReader was intentionally terminated.")
+                break
+            
             if self.process.returncode == 0:
                 logger.info("Finished successfully")
                 break
 
             logger.warning(f"The partition extraction failed (attempt {attempt}/{MAX_DSBULK_RETRIES}), attempting to restart the process")
-            time.sleep(15)
+            
+            if self._stop_event.wait(15):
+                logger.warning("Terminate DSBulk unload operation")
+                break
         else:
             logger.error(f"dsbulk failed after {MAX_DSBULK_RETRIES} attempts, giving up")
 
@@ -78,6 +94,7 @@ class DsBulkReader(threading.Thread):
         self.get_partitions()
         
     def stop_dsbulk(self):
+        self._stop_event.set()
         if self.process:
             self.process.terminate()
             self.process.wait()
