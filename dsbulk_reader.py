@@ -6,8 +6,9 @@ import logging
 from typing import override
 import time
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+MAX_DSBULK_RETRIES = 10
 
 
 class DsBulkReader(threading.Thread):
@@ -19,9 +20,11 @@ class DsBulkReader(threading.Thread):
         self.cassandra_dc = cassandra_dc
         self.log_dir = os.path.join(os.path.dirname(path_to_working_directory), "logs")
         self.process: subprocess.Popen[str] | None = None
+        
         os.makedirs(path_to_working_directory, exist_ok=True)
         os.makedirs(partitions_directory, exist_ok=True)
         
+        self._stop_event = threading.Event()
         self.daemon = True
 
     def _find_latest_checkpoint(self):
@@ -41,20 +44,16 @@ class DsBulkReader(threading.Thread):
                   "-dc", self.cassandra_dc,
                   "-query", "SELECT DISTINCT entity_type, entity_id, key, partition FROM tb.ts_kv_cf",
                   "--connector.csv.maxRecords", "5000",
-                  "--executor.maxPerSecond", "1024",
-                  "--schema.splits", "50000",
-                  "--executor.continuousPaging.enabled", "false",
-                  "--driver.basic.request.page-size", "2000",
-                  "--engine.maxConcurrentQueries", "3",
-                  "--driver.advanced.protocol.compression", "lz4",
-                  "--log.maxErrors", "999888",
-                  "--log.verbosity", "high",
-                  "--driver.basic.request.consistency", "LOCAL_QUORUM"]
-        while True:
+                  "--executor.maxPerSecond", "1024"]
+        for attempt in range(1, MAX_DSBULK_RETRIES + 1):
             current_cmd: list[str] = dsbulk_command.copy()
-            
-            checkpoint: str | None = self._find_latest_checkpoint()
 
+            checkpoint: str | None = self._find_latest_checkpoint()
+            
+            if self._stop_event.is_set():
+                logger.info("DsBulkReader was intentionally terminated.")
+                break
+            
             if checkpoint:
                 logger.info(f"Found this checkpoint {checkpoint}")
                 current_cmd.append(f"--dsbulk.log.checkpoint.file={checkpoint}")
@@ -62,14 +61,17 @@ class DsBulkReader(threading.Thread):
                 current_cmd.append("resume")
 
             self.process = subprocess.Popen(current_cmd, text=True)
-            
+
             self.process.wait()
-            
+
             if self.process.returncode == 0:
+                logger.info("Finished successfully")
                 break
-            
-            logger.warning("The partition extraction failed, attempting to restart the process")
+
+            logger.warning(f"The partition extraction failed (attempt {attempt}/{MAX_DSBULK_RETRIES}), attempting to restart the process")
             time.sleep(15)
+        else:
+            logger.error(f"dsbulk failed after {MAX_DSBULK_RETRIES} attempts, giving up")
 
     @override
     def run(self):
@@ -78,3 +80,4 @@ class DsBulkReader(threading.Thread):
     def stop_dsbulk(self):
         if self.process:
             self.process.terminate()
+            self.process.wait()
