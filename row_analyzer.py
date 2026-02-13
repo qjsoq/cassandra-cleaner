@@ -11,8 +11,6 @@ import csv
 import os
 
 logger = logging.getLogger(__name__)
-DATABASE_DSN = f"postgresql://{os.getenv('DATABASE_USERNAME', 'thingsboard')}:{urllib.parse.quote_plus(os.getenv('DATABASE_PASSWORD', 'postgres'))}@{os.getenv('DATABASE_HOST', "localhost")}:5432/thingsboard"
-BATCH_SIZE = 500
 
 ENTITY_TABLE_NAME_MAP = {
     "TENANT": "tenant",
@@ -67,8 +65,8 @@ ALLOWED_TABLE_NAMES: frozenset[str] = frozenset(ENTITY_TABLE_NAME_MAP.values())
 
 
 def _build_database_dsn() -> str:
-    username = os.getenv('DATABASE_USERNAME', 'postgres')
-    password = urllib.parse.quote_plus(os.getenv('DATABASE_PASSWORD', 'postgres'))
+    username = os.getenv('DATABASE_USERNAME', 'thingsboard')
+    password = urllib.parse.quote_plus(os.getenv('DATABASE_PASSWORD', 'cr67SDQQ?fEvA>m6KX8X]:|C'))
     host = os.getenv('DATABASE_HOST', 'localhost')
     return f"postgresql://{username}:{password}@{host}:5432/thingsboard"
 
