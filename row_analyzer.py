@@ -12,7 +12,7 @@ import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-DATABASE_DSN = f"postgresql://{os.getenv('DATABASE_USERNAME', 'postgres')}:{urllib.parse.quote_plus(os.getenv('DATABASE_PASSWORD', 'postgres'))}@{os.getenv('DATABASE_HOST', "localhost")}:5432/thingsboard"
+DATABASE_DSN = f"postgresql://{os.getenv('DATABASE_USERNAME', 'thingsboard')}:{urllib.parse.quote_plus(os.getenv('DATABASE_PASSWORD', 'postgres'))}@{os.getenv('DATABASE_HOST', "localhost")}:5432/thingsboard"
 BATCH_SIZE = 500
 
 ENTITY_TABLE_NAME_MAP = {

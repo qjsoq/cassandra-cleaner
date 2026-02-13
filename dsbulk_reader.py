@@ -41,7 +41,15 @@ class DsBulkReader(threading.Thread):
                   "-dc", self.cassandra_dc,
                   "-query", "SELECT DISTINCT entity_type, entity_id, key, partition FROM tb.ts_kv_cf",
                   "--connector.csv.maxRecords", "5000",
-                  "--executor.maxPerSecond", "1024"]
+                  "--executor.maxPerSecond", "1024",
+                  "--schema.splits", "50000",
+                  "--executor.continuousPaging.enabled", "false",
+                  "--driver.basic.request.page-size", "2000",
+                  "--engine.maxConcurrentQueries", "3",
+                  "--driver.advanced.protocol.compression", "lz4",
+                  "--log.maxErrors", "999888",
+                  "--log.verbosity", "high",
+                  "--driver.basic.request.consistency", "LOCAL_QUORUM"]
         while True:
             current_cmd: list[str] = dsbulk_command.copy()
             
