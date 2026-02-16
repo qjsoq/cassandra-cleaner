@@ -1,5 +1,6 @@
 from multiprocessing import Queue, Process
 from cassandra_row_inferno import CassandraCleaner
+from contextlib import AsyncExitStack
 from typing import override, Any, Coroutine, NoReturn
 import urllib.parse
 import time
@@ -125,34 +126,30 @@ class RowAnalyzer(Process):
             
         
     async def analyzer_event_loop(self) -> None:
-        if not self.dry_run:
-            self.cassandra_cleaner.connect()
-        
-        async with asyncpg.create_pool(dsn=_build_database_dsn(), min_size=5, max_size=6) as postgres_pool:
-            loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
-            try:
-                while True:
+        async with AsyncExitStack() as stack:
+            if not self.dry_run:
+                logger.info("Initializing Cassandra context")
+                await stack.enter_async_context(self.cassandra_cleaner)
+            
+            postgres_pool = await stack.enter_async_context(asyncpg.create_pool(dsn=_build_database_dsn(), min_size=5, max_size=6))
+            while True:
+                file_path: str | None = await asyncio.to_thread(self.read_queue.get)
+                        
+                if file_path is None:
+                    logger.info(f"Received poison pill. Shutting down analyzer. {self.name}")
+                    break
 
-                    file_path: str | None = await loop.run_in_executor(None, self.read_queue.get)
+                await self.get_row_from_file(file_path, postgres_pool)
+
                     
-                    if file_path is None:
-                        logger.info(f"Received poison pill. Shutting down analyzer. {self.name}")
-                        break
-
-                    await self.get_row_from_file(file_path, postgres_pool)
-            finally:
-                if not self.dry_run:
-                    self.cassandra_cleaner.shutdown()
-                
     
     async def get_row_from_file(self, file_path: str, connection_pool: asyncpg.Pool) -> None:
         tasks: list[Coroutine[Any, Any, Any]] = []
         start_time: float = time.time()
         logger.info(f"Start processing {file_path}")
         
-        loop = asyncio.get_running_loop()
         logger.info(f"Load file {file_path}")
-        csv_data_frame: pd.DataFrame = await loop.run_in_executor(None, pd.read_csv, file_path)
+        csv_data_frame: pd.DataFrame = await asyncio.to_thread(pd.read_csv, file_path)
         
         group_by_entity = csv_data_frame.groupby("entity_type")
         logger.info(f"The size of grouping by entity is {group_by_entity.size()}")

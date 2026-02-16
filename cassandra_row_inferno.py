@@ -44,6 +44,14 @@ class CassandraCleaner:
         if self.cluster:
             self.cluster.shutdown()
             logger.info("Cassandra connection closed.")
+            
+    async def __aenter__(self):
+        self.connect()
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.shutdown()
+        return False
 
     async def delete_partitions(self, rows: list[dict[str, str]]):
 
