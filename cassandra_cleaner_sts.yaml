@@ -25,16 +25,16 @@ spec:
       restartPolicy: Never
       containers:
       - name: cassandra-cleaner
-        image: artamonovdima/cassandra_cleaner_dry_run:1.2
+        image: artamonovdima/cassandra_cleaner:1.6
         command: ["/bin/sh", "-c"]
-        args: ["mkdir -p /data/logs && /app/main --dry-run 2>&1 | tee /data/logs/cleaner-$(date +%Y%m%d-%H%M%S).log"]
+        args: ["mkdir -p /data/logs && /app/main 2>&1 | tee /data/logs/cleaner-$(date +%Y%m%d-%H%M%S).log"]
         resources:
           limits:
             memory: "1Gi"
-            cpu: "4000m"
+            cpu: "2000m"
           requests:
             memory: "1Gi"
-            cpu: "4000m"
+            cpu: "2000m"
         env:
         - name: PYTHONUNBUFFERED
           value: "1"
@@ -66,6 +66,11 @@ spec:
           value: "postgresql-ha-replicas.thingsboard.svc.cluster.local"
         - name: PARTITION_KEYS_DIRECTORY
           value: "/data/working/"
+        - name: DSBULK_SCHEMA_SPLITS
+          value: "1000"
+        - name: DSBULK_REQUEST_PAGE_SIZE
+          value: "3000"
+
         volumeMounts:
         - name: cassandra-cleaner-storage
           mountPath: /data

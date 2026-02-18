@@ -80,7 +80,7 @@ class RowAnalyzer(Process):
         self.read_queue = read_queue
         self.dry_run = dry_run
         self.cassandra_cleaner = CassandraCleaner(
-            hosts=[os.getenv('CASSANDRA_HOST', 'localhost')],
+            hosts=[os.getenv('CASSANDRA_URL', 'localhost')],
             username=os.getenv('CASSANDRA_USERNAME', 'cassandra'),
             password=os.getenv('CASSANDRA_PASSWORD', 'cassandra')
         )
@@ -105,7 +105,7 @@ class RowAnalyzer(Process):
         
         start_fetch_time: float = time.time()
         
-        found_rows = None
+        found_rows: list[dict[str, str]] | None = None
         
         for attempt in range(10):
             try:    
@@ -131,7 +131,14 @@ class RowAnalyzer(Process):
                 logger.info("Initializing Cassandra context")
                 await stack.enter_async_context(self.cassandra_cleaner)
             
-            postgres_pool = await stack.enter_async_context(asyncpg.create_pool(dsn=_build_database_dsn(), min_size=5, max_size=6))
+            print(f"[DEBUG] {self.name} Attempting to connect to Postgres...")
+            
+            try:
+                postgres_pool = await stack.enter_async_context(asyncpg.create_pool(dsn=_build_database_dsn(), min_size=5, max_size=6))
+            except Exception as e:
+                print(f"[CRITICAL ERROR] {self.name} failed to connect to Postgres: {e}")
+                return
+            
             while True:
                 file_path: str | None = await asyncio.to_thread(self.read_queue.get)
                         
@@ -152,10 +159,10 @@ class RowAnalyzer(Process):
         csv_data_frame: pd.DataFrame = await asyncio.to_thread(pd.read_csv, file_path)
         
         group_by_entity = csv_data_frame.groupby("entity_type")
-        logger.info(f"The size of grouping by entity is {group_by_entity.size()}")
+        logger.info(f"The size of grouping by entity is {group_by_entity.size()} {self.name}")
         
         for entity_type, group_data_frame in group_by_entity:
-            logger.info(f"Appending tasks for {entity_type} in {file_path} with {len(group_data_frame)}")
+            logger.info(f"Appending tasks for {entity_type} in {file_path} with {len(group_data_frame)} {self.name}")
             tasks.append(
                 self.check_rows_in_postgres(group_data_frame, connection_pool, str(entity_type))
             )
@@ -174,7 +181,7 @@ class RowAnalyzer(Process):
                 continue
             rows: list[dict] = result.to_dict(orient="records")
             for row in rows:
-                logger.info(f"Deleting this partition key entity_type: {row['entity_type']}, entity_id: {row['entity_id']}, key: {row['key']}, partition: {row['partition']}")
+                logger.info(f"Deleting this partition key entity_type: {row['entity_type']}, entity_id: {row['entity_id']}, key: {row['key']}, partition: {row['partition']} responsible: {self.name}")
 
             if self.dry_run:
                 continue

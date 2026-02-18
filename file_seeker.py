@@ -44,7 +44,7 @@ class FileSeeker(threading.Thread):
                 logger.warning(f"File is in active use {file}")
                 continue
 
-        self.processed_files_set -= self.processed_files_set - set(candidate_files)
+        self.processed_files_set.intersection_update(candidate_files)
 
         return None
 

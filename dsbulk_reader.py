@@ -8,7 +8,7 @@ import time
 
 logger = logging.getLogger(__name__)
 
-MAX_DSBULK_RETRIES = 10
+MAX_DSBULK_RETRIES = 20
 
 
 class DsBulkReader(threading.Thread):
@@ -46,13 +46,21 @@ class DsBulkReader(threading.Thread):
                   "-p", os.getenv('CASSANDRA_PASSWORD', 'cassandra'),
                   "-query", "SELECT DISTINCT entity_type, entity_id, key, partition FROM tb.ts_kv_cf",
                   "--connector.csv.maxRecords", "5000",
-                  "--executor.maxPerSecond", "2048",
+                  "--driver.basic.request.page-size", os.getenv("DSBULK_REQUEST_PAGE_SIZE", "3000"),
+                  "--executor.maxPerSecond", "4096",
                   "--executor.continuousPaging.enabled", "false",
-                  "--schema.splits", "50000",
-                  "--engine.maxConcurrentQueries", "64",
+                  "--schema.splits", os.getenv("DSBULK_SCHEMA_SPLITS", "10000"),
+                  "--engine.maxConcurrentQueries", "32",
                   "--driver.advanced.protocol.compression", "lz4",
                   "--log.maxErrors", "999888",
-                  "--log.verbosity", "high",
+                  "--log.verbosity", "normal",
+                  "--log.maxQueryWarnings", "10",
+                  "--driver.advanced.request-tracker.classes", "[RequestLogger]",
+                  "--driver.advanced.request-tracker.logs.error.enabled", "true",
+                  "--driver.advanced.request-tracker.logs.show-stack-traces", "true",
+                  "--driver.advanced.connection.init-query-timeout", "60 seconds",
+                  "--driver.advanced.connection.connect-timeout", "60 seconds",
+                  "--driver.advanced.retry-policy-max-retries", "10",
                   "--driver.basic.request.consistency", "LOCAL_QUORUM"]
         for attempt in range(1, MAX_DSBULK_RETRIES + 1):
             current_cmd: list[str] = dsbulk_command.copy()
