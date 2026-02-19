@@ -47,7 +47,7 @@ class DsBulkReader(threading.Thread):
                   "-query", "SELECT DISTINCT entity_type, entity_id, key, partition FROM tb.ts_kv_cf",
                   "--connector.csv.maxRecords", "5000",
                   "--driver.basic.request.page-size", os.getenv("DSBULK_REQUEST_PAGE_SIZE", "3000"),
-                  "--executor.maxPerSecond", "4096",
+                  "--executor.maxPerSecond", "8192",
                   "--executor.continuousPaging.enabled", "false",
                   "--schema.splits", os.getenv("DSBULK_SCHEMA_SPLITS", "10000"),
                   "--engine.maxConcurrentQueries", os.getenv("DSBULK_ENGINE_MAXCONCURRENT", "32"),
