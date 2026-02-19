@@ -8,7 +8,7 @@ import time
 
 logger = logging.getLogger(__name__)
 
-MAX_DSBULK_RETRIES = 20
+MAX_DSBULK_RETRIES = 45
 
 
 class DsBulkReader(threading.Thread):
@@ -50,7 +50,7 @@ class DsBulkReader(threading.Thread):
                   "--executor.maxPerSecond", "4096",
                   "--executor.continuousPaging.enabled", "false",
                   "--schema.splits", os.getenv("DSBULK_SCHEMA_SPLITS", "10000"),
-                  "--engine.maxConcurrentQueries", "32",
+                  "--engine.maxConcurrentQueries", os.getenv("DSBULK_ENGINE_MAXCONCURRENT", "32"),
                   "--driver.advanced.protocol.compression", "lz4",
                   "--log.maxErrors", "999888",
                   "--log.verbosity", "normal",

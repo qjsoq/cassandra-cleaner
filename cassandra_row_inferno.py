@@ -1,4 +1,5 @@
 import logging
+import time
 import asyncio
 import uuid
 import pandas as pd
@@ -67,9 +68,10 @@ class CassandraCleaner:
         # Pass the instance semaphore
         tasks = [self.delete_row_task(row=row, semaphore=self.semaphore, loop=loop) for row in rows]
         
-        logger.info(f"Starting deletion of {len(tasks)} partitions with shared concurrency limit")
+        start_deletion_time: float = time.time()
+        logger.info(f"Starting deletion of {len(tasks)} partitions with shared concurrency limit {id(self)}")
         results: list = await asyncio.gather(*tasks, return_exceptions=True)
-        logger.info(f"Complete deletion of {len(tasks)} partitions")
+        logger.info(f"Complete deletion of {len(tasks)} partitions it took {time.time() - start_deletion_time} seconds {id(self)}")
 
         failures: list[tuple[dict, Exception]] = []
         for index, result in enumerate(results):

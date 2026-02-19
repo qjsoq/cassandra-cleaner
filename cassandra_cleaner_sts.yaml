@@ -25,7 +25,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: cassandra-cleaner
-        image: artamonovdima/cassandra_cleaner:1.6
+        image: artamonovdima/cassandra_cleaner:1.7
         command: ["/bin/sh", "-c"]
         args: ["mkdir -p /data/logs && /app/main 2>&1 | tee /data/logs/cleaner-$(date +%Y%m%d-%H%M%S).log"]
         resources:
