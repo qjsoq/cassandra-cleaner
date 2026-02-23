@@ -82,7 +82,8 @@ class RowAnalyzer(Process):
         self.cassandra_cleaner = CassandraCleaner(
             hosts=[os.getenv('CASSANDRA_URL', 'localhost')],
             username=os.getenv('CASSANDRA_USERNAME', 'cassandra'),
-            password=os.getenv('CASSANDRA_PASSWORD', 'cassandra')
+            password=os.getenv('CASSANDRA_PASSWORD', 'cassandra'),
+            concurrency=int(os.getenv("CASSANDRA_DELETE_CONCURRENCY", 5))
         )
         
     

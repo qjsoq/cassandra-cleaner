@@ -11,7 +11,7 @@ from cassandra.query import PreparedStatement
 logger = logging.getLogger(__name__)
 
 class CassandraCleaner:
-    def __init__(self, hosts: list[str], username: str, password: str, concurrency: int = 2):
+    def __init__(self, hosts: list[str], username: str, password: str, concurrency: int):
         self.hosts: list[str] = hosts
         self.auth_provider: PlainTextAuthProvider = PlainTextAuthProvider(username=username, password=password)
         self.cluster: Cluster | None = None

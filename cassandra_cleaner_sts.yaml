@@ -25,7 +25,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: cassandra-cleaner
-        image: artamonovdima/cassandra_cleaner:1.7
+        image: artamonovdima/cassandra_cleaner:1.9
         command: ["/bin/sh", "-c"]
         args: ["mkdir -p /data/logs && /app/main 2>&1 | tee /data/logs/cleaner-$(date +%Y%m%d-%H%M%S).log"]
         resources:
@@ -70,6 +70,8 @@ spec:
           value: "1000"
         - name: DSBULK_REQUEST_PAGE_SIZE
           value: "3000"
+        - name: CASSANDRA_DELETE_CONCURRENCY
+          value: "20"
 
         volumeMounts:
         - name: cassandra-cleaner-storage
